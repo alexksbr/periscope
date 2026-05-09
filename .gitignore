@@ -1,0 +1,57 @@
+# Private agent override
+AGENTS.local.md
+*.local.md
+
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.pyre/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+
+# Virtual environments and package tooling
+.venv/
+venv/
+env/
+ENV/
+.tox/
+.nox/
+build/
+dist/
+*.egg-info/
+
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+!.env.sample
+*.local
+
+# Docker and local runtime state
+docker-compose.override.yml
+compose.override.yml
+data/
+tmp/
+temp/
+logs/
+*.log
+
+# Tool output
+.cache/
+.hypothesis/
+reports/
+
+# Editors and OS files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
