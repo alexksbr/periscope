@@ -32,7 +32,7 @@ ADR numbers are append-only. Don't reorder.
 | ----- | ------------------------------------------------------------- | -------- |
 | 0001  | Spans schema (column types, partition key, sort key, TTL)     | Accepted  |
 | 0002  | Multi-tenancy approach (RLS / row policy / schema-per-tenant) | Planned  |
-| 0003  | Ingest buffer (Redpanda vs Kafka)                             | Planned  |
+| 0003  | Ingest buffer                                                 | Accepted  |
 | 0004  | Materialized-view rollups (cost / latency / errors)           | Planned  |
 | 0005  | ClickHouse indexes, skip indexes, projections                 | Planned  |
 | 0006  | Agent tool API (inputs, outputs, idempotency, timeouts)       | Planned  |
