@@ -1,6 +1,33 @@
 name: periscope
 
 services:
+  clickhouse:
+    image: clickhouse/clickhouse-server:latest
+    environment:
+      CLICKHOUSE_DB: periscope
+      CLICKHOUSE_USER: periscope
+      CLICKHOUSE_PASSWORD: periscope
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
+    ports:
+      - "8123:8123"
+      - "9000:9000"
+    volumes:
+      - ./src/periscope/schemas/clickhouse:/docker-entrypoint-initdb.d:ro
+      - clickhouse-data:/var/lib/clickhouse
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "clickhouse-client --user=$$CLICKHOUSE_USER --password=$$CLICKHOUSE_PASSWORD --query='SELECT 1'",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+
   otel-collector:
     image: otel/opentelemetry-collector-contrib:latest
     command: ["--config=/etc/otelcol-contrib/config.yaml"]
@@ -40,5 +67,6 @@ services:
       retries: 5
 
 volumes:
+  clickhouse-data:
   postgres-data:
   redis-data:
