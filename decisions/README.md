@@ -30,7 +30,7 @@ ADR numbers are append-only. Don't reorder.
 
 | #     | Title                                                         | Status   |
 | ----- | ------------------------------------------------------------- | -------- |
-| 0001  | Spans schema (column types, partition key, sort key, TTL)     | Accepted  |
+| 0001  | ClickHouse telemetry schema                                   | Accepted  |
 | 0002  | Multi-tenancy approach (RLS / row policy / schema-per-tenant) | Planned  |
 | 0003  | Ingest buffer                                                 | Accepted  |
 | 0004  | Materialized-view rollups (cost / latency / errors)           | Planned  |

@@ -10,7 +10,7 @@ No streaming buffer (Kafka/Redpanda) at MVP. The OpenTelemetry Collector exports
 
 ## Context
 
-ADR-0001 established the spans table in ClickHouse as the substrate. The next architectural question is what sits between the application code emitting OTLP and ClickHouse accepting writes.
+ADR-0001 established the exporter-managed ClickHouse OTel tables as the telemetry substrate. The next architectural question is what sits between the application code emitting OTLP and ClickHouse accepting writes.
 
 Two shapes are common:
 
@@ -22,7 +22,7 @@ The buffered shape is canonical for high-volume telemetry ingest and is the text
 Constraints:
 
 - **MVP traffic is dogfood-scale** — well under what the collector's queue can handle without a buffer.
-- **One consumer** — ClickHouse — for the foreseeable future. The investigator agent reads from ClickHouse, not from a stream.
+- **One consumer** — ClickHouse — for the foreseeable future. The investigator agent reads from ClickHouse tables, not from a stream.
 - **No replay-against-new-prompt feature** in MVP scope; that's a stretch goal that, if pursued, would push toward a buffer.
 - **Operational simplicity matters** — every additional service in the stack is something to monitor, debug, and document.
 
@@ -98,7 +98,7 @@ The deferred design, ready to ship when a trigger condition activates:
 Decisions baked into the future-state design:
 
 - **Redpanda over Apache Kafka.** Single C++ binary, no JVM, no ZooKeeper. Kafka-protocol compatible — clients work unchanged. Operational simplicity wins at our scale; switching to Kafka later is mechanical (same client code) if the team and ops capacity grow.
-- **One topic for all spans** (`spans`). One signal type, no need for per-tenant or per-service topics — partitioning handles distribution, the spans table handles tenancy.
+- **One topic for all spans** (`spans`). One signal type, no need for per-tenant or per-service topics — partitioning handles distribution, and ClickHouse remains the query substrate.
 - **Partition key: `trace_id`.** Keeps every span in a trace in the same partition, so any consumer that wants per-trace ordering gets it for free. Distribution is uniform because trace IDs are random.
 - **Partition count: 16** as a starting default — enough for parallel consumer scaling, low enough for low-volume operations. Adjustable.
 - **Replication factor**: 1 in dev, 3 in production-grade deployments.
@@ -151,7 +151,7 @@ Two collectors chained, where the first acts as a queue feeding the second. Reje
 - [OpenTelemetry Collector `file_storage` extension](https://github.com/open-telemetry/opentelemetry-collector-contrib/tree/main/extension/storage/filestorage)
 - [Redpanda architecture](https://docs.redpanda.com/current/get-started/architecture/)
 - [Apache Kafka design](https://kafka.apache.org/documentation/#design)
-- ADR-0001 (Spans schema) — defines the table this exporter writes to.
+- ADR-0001 (ClickHouse telemetry schema) — uses exporter-managed OTel tables for MVP storage.
 
 ## Notes
 

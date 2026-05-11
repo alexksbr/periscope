@@ -31,8 +31,13 @@ services:
   otel-collector:
     image: otel/opentelemetry-collector-contrib:latest
     command: ["--config=/etc/otelcol-contrib/config.yaml"]
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+    user: "0:0"
     volumes:
       - ./docker/otel-collector.yaml:/etc/otelcol-contrib/config.yaml:ro
+      - otel-collector-data:/var/lib/otelcol
     ports:
       - "4317:4317"
       - "4318:4318"
@@ -68,5 +73,6 @@ services:
 
 volumes:
   clickhouse-data:
+  otel-collector-data:
   postgres-data:
   redis-data:
