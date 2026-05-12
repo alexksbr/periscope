@@ -35,7 +35,7 @@ ADR numbers are append-only. Don't reorder.
 | 0003  | Ingest buffer                                                 | Accepted  |
 | 0004  | Materialized-view rollups (cost / latency / errors)           | Planned  |
 | 0005  | ClickHouse indexes, skip indexes, projections                 | Planned  |
-| 0006  | Agent tool API (inputs, outputs, idempotency, timeouts)       | Planned  |
+| 0006  | Agent tool API (inputs, outputs, idempotency, timeouts)       | Accepted |
 | 0007  | Citation model (linking agent claims to evidence)             | Planned  |
 | 0008  | Eval format (golden cases, scoring rubric, EFCB compat)       | Planned  |
 | 0009  | Hybrid retrieval (BM25 + dense merge, rerank threshold)       | Planned  |
