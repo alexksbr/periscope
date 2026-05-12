@@ -1,0 +1,94 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    name: Python Checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --locked
+
+      - name: Lint
+        run: uv run ruff check .
+
+      - name: Check formatting
+        run: uv run ruff format --check .
+
+      - name: Type-check
+        run: uv run mypy src
+
+      - name: Unit tests
+        run: uv run pytest -q
+
+  integration:
+    name: OTel Round Trip
+    runs-on: ubuntu-latest
+    needs: checks
+    timeout-minutes: 15
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --locked
+
+      - name: Start telemetry stack
+        run: docker compose up -d clickhouse otel-collector
+
+      - name: Wait for ClickHouse
+        run: |
+          timeout 120 bash -c 'until docker compose exec -T clickhouse clickhouse-client --user periscope --password periscope --query "SELECT 1"; do sleep 2; done'
+
+      - name: Wait for OTel Collector
+        run: |
+          timeout 120 bash -c 'until true </dev/tcp/127.0.0.1/4317; do sleep 2; done'
+
+      - name: Integration tests
+        run: uv run pytest -q -m integration
+
+      - name: Dump Docker logs
+        if: failure()
+        run: docker compose logs --no-color
+
+      - name: Stop telemetry stack
+        if: always()
+        run: docker compose down -v
