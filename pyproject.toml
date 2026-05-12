@@ -60,6 +60,10 @@ strict = true
 warn_unreachable = true
 
 [tool.pytest.ini_options]
+addopts = ["-m", "not integration"]
 asyncio_mode = "auto"
+markers = [
+    "integration: requires the Docker Compose stack and local network ports",
+]
 pythonpath = ["src", "."]
 testpaths = ["tests"]
