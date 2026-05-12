@@ -126,8 +126,3 @@ If asked to change anything in these paths: check the decision log first. If the
 - Project overview, architecture diagram, comparison: [README.md](README.md)
 - Decision log (ADRs): [docs/decisions/](docs/decisions/) — start with the index in [docs/decisions/README.md](docs/decisions/README.md)
 - Roadmap: [README.md](README.md#roadmap)
-
-## Private Local Override
-
-Before answering or editing files, check whether `AGENTS.local.md` exists next to this file.
-If it exists, read it and follow it in addition to this file. Local instructions take precedence.
