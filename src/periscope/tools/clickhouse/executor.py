@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Sequence
+from math import isfinite
 from typing import Any, cast
 
 import clickhouse_connect  # type: ignore[import-untyped]
@@ -204,13 +205,28 @@ def _parse_connect_elapsed_ms(result: object) -> float | None:
     summary = getattr(result, "summary", None)
     if not isinstance(summary, dict):
         return None
-    elapsed = summary.get("elapsed")
-    if not isinstance(elapsed, int | float) or isinstance(elapsed, bool):
-        elapsed_ns = summary.get("elapsed_ns")
-        if isinstance(elapsed_ns, int | float) and not isinstance(elapsed_ns, bool):
-            return float(elapsed_ns) / 1_000_000
+    elapsed = _parse_summary_number(summary.get("elapsed"))
+    if elapsed is not None:
+        return elapsed * 1000
+    elapsed_ns = _parse_summary_number(summary.get("elapsed_ns"))
+    if elapsed_ns is None:
         return None
-    return float(elapsed) * 1000
+    return elapsed_ns / 1_000_000
+
+
+def _parse_summary_number(value: object) -> float | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int | float):
+        number = float(value)
+    elif isinstance(value, str):
+        try:
+            number = float(value)
+        except ValueError:
+            return None
+    else:
+        return None
+    return number if isfinite(number) else None
 
 
 def _parse_connect_query_id(result: object) -> str | None:

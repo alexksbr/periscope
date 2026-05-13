@@ -364,6 +364,16 @@ async def test_clickhouse_connect_executor_queries_with_readonly_and_query_id() 
 
 
 @pytest.mark.asyncio
+async def test_clickhouse_connect_executor_parses_elapsed_ns_strings() -> None:
+    client = FakeConnectClient(FakeConnectResult(summary={"elapsed_ns": "12500000"}))
+    executor = ClickHouseConnectQueryExecutor(client=client)
+
+    execution = await executor.execute("SELECT 1 AS value")
+
+    assert execution.elapsed_ms == 12.5
+
+
+@pytest.mark.asyncio
 async def test_clickhouse_connect_executor_can_disable_readonly_setting() -> None:
     client = FakeConnectClient()
     executor = ClickHouseConnectQueryExecutor(
