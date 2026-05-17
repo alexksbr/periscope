@@ -40,6 +40,8 @@ ADR numbers are append-only. Don't reorder.
 | 0008  | Eval format (golden cases, scoring rubric, EFCB compat)       | Planned  |
 | 0009  | Hybrid retrieval (BM25 + dense merge, rerank threshold)       | Planned  |
 | 0010  | Recursive instrumentation (agent traces itself, no loops)     | Planned  |
+| 0011  | QX contract and schema context                                | Accepted |
+| 0012  | LangChain and LangGraph agentic runtime                       | Accepted |
 
 `Planned` means the ADR is on the roadmap but not yet written. `Proposed` means a draft exists and is open for discussion. `Accepted` means it's the active decision. `Superseded` means a newer ADR replaces it.
 
