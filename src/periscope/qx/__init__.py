@@ -3,7 +3,6 @@ from __future__ import annotations
 from periscope.qx.langchain import (
     DEFAULT_QX_SQL_SYSTEM_PROMPT,
     LangChainQxCompiler,
-    build_clickhouse_query_langchain_tool,
     render_schema_context,
 )
 from periscope.qx.models import (
@@ -33,6 +32,5 @@ __all__ = [
     "QxSchemaSnapshot",
     "QxSqlCandidate",
     "QxTableSchema",
-    "build_clickhouse_query_langchain_tool",
     "render_schema_context",
 ]

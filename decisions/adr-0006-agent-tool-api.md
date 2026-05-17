@@ -6,7 +6,7 @@
 
 ## Summary
 
-Periscope tools use a Python-first, async, Pydantic-typed API internally. The tool runner adapts LLM JSON tool calls into typed inputs, enforces execution policy, and returns a standard result envelope with typed data, typed errors, evidence references, and compact metadata.
+Periscope tools use a Python-first, async, Pydantic-typed API internally. Per ADR-0012, LangChain tool adapters and LangGraph tool execution adapt LLM JSON tool calls into typed inputs, enforce execution policy, and return a standard result envelope with typed data, typed errors, evidence references, and compact metadata.
 
 ## Context
 
@@ -60,22 +60,22 @@ Each concrete tool declares:
 - `default_timeout_s`
 - `max_timeout_s`
 
-The tool runner is the adapter between the model-facing JSON protocol and internal Python code:
+The LangChain tool adapter is the boundary between the model-facing JSON protocol and internal Python code:
 
 1. receive tool name and JSON arguments from the LLM loop
-2. find the tool in the static registry
+2. route the call to the selected Periscope tool adapter
 3. validate arguments into the tool's Pydantic input model
 4. enforce timeout, retry, idempotency, and observability policy
 5. call the tool's async Python implementation
 6. return a `ToolResult` serialized back to JSON for the LLM loop
 
-The runner is not a remote RPC layer in MVP. It is an in-process dispatcher and policy boundary.
+The adapter is not a remote RPC layer in MVP. It is an in-process policy boundary exposed through LangChain/LangGraph runtime primitives.
 
 ### Result and error model
 
 Every tool execution returns a standard `ToolResult[T]` envelope, where `T` is the tool-specific success data model.
 
-Expected tool failures are represented as typed `ToolError` values. Tool implementations may raise specific internal exceptions for unexpected failures, but the tool runner converts validation failures, execution exceptions, per-call timeouts, and transient infrastructure failures into `ToolError` results before returning to the agent loop.
+Expected tool failures are represented as typed `ToolError` values. Tool implementations may raise specific internal exceptions for unexpected failures, but the adapter converts execution exceptions, per-call timeouts, and transient infrastructure failures into `ToolError` results before returning to the agent loop. Framework-level schema validation may fail before Periscope tool code runs.
 
 Caller-initiated cancellation, such as shutdown or an abandoned investigation, propagates so work can stop promptly. Per-call timeout is reported as `ToolError(code="timeout", retryable=True)`.
 
@@ -91,19 +91,19 @@ MVP tools are read-only by default. Every tool declares whether it is idempotent
 
 Every tool call gets a stable `tool_call_id`. `idempotency_key` is supported in `ToolContext` but is required only for future non-idempotent, mutating tools such as creating an incident note, posting a message, opening an issue, or acknowledging an alert.
 
-The tool runner rejects non-idempotent calls without an idempotency key once mutating tools exist.
+The adapter rejects non-idempotent calls without an idempotency key once mutating tools exist.
 
 ### Timeouts, retries, and streaming
 
-The tool runner enforces timeouts. Each tool declares `default_timeout_s` and `max_timeout_s`. The agent may request a timeout, but the runner caps it at the tool maximum.
+The adapter enforces timeouts. Each tool declares `default_timeout_s` and `max_timeout_s`. The agent may request a timeout, but the adapter caps it at the tool maximum.
 
-The runner may perform one automatic retry for clearly transient infrastructure errors. SQL validation errors, permission errors, empty results, semantic failures, and non-retryable tool errors are returned to the agent loop without automatic retry.
+The adapter may perform one automatic retry for clearly transient infrastructure errors. SQL validation errors, permission errors, empty results, semantic failures, and non-retryable tool errors are returned to the agent loop without automatic retry.
 
 MVP tool calls are non-streaming. A tool execution returns exactly one final `ToolResult`. Progress events are internal telemetry and are not part of the tool output contract.
 
 ### Observability and persistence
 
-The tool runner wraps every tool execution in an OpenTelemetry span. The span records compact metadata such as tool name, schema version, tool call id, investigation id, status, duration, timeout, error code, retryability, and evidence count.
+The adapter wraps every tool execution in an OpenTelemetry span. The span records compact metadata such as tool name, schema version, tool call id, investigation id, status, duration, timeout, error code, retryability, and evidence count.
 
 Full SQL result rows, logs, prompts, and raw tool outputs are not recorded as span attributes by default.
 
@@ -127,8 +127,8 @@ The MVP includes a read-only raw SQL tool, `clickhouse.query`, because autonomou
 - single statement only
 - `SELECT` only
 - no DDL or DML
-- timeout enforced by the runner
-- row limit enforced by the input model and runner
+- timeout enforced by the adapter
+- row limit enforced by the input model and `clickhouse.query`
 - query is logged and linked to evidence
 
 `qx` is exposed to the investigator as a stateless SQL-generation tool, `qx.generate_sql`. It turns a natural-language telemetry question into SQL plus explanation and warnings. It does not execute SQL, own investigation state, or produce final evidence.
@@ -143,9 +143,9 @@ The intended flow is:
 
 The investigator is the planner, reasoner, and synthesizer. `qx` is a narrower NL-to-SQL subsystem used by the investigator.
 
-### Registry
+### Tool exposure
 
-MVP uses a static in-process tool registry. Plugin discovery is deferred. The tool protocol should not block future plugins, MCP exposure, or remote execution, but ADR-0006 does not define a plugin system.
+MVP exposes built-in Periscope tools through explicit LangChain adapters. Plugin discovery is deferred. The tool protocol should not block future plugins, MCP exposure, or remote execution, but ADR-0006 does not define a plugin system.
 
 ## Consequences
 
@@ -153,7 +153,7 @@ MVP uses a static in-process tool registry. Plugin discovery is deferred. The to
 
 - Internal tool code stays simple, async, typed, testable, and compatible with `mypy --strict`.
 - LLM and future MCP boundaries still get JSON Schema generated from the same Pydantic models.
-- The agent loop gets uniform handling for validation, errors, evidence, retries, idempotency, timeouts, observability, and replay metadata.
+- The agent loop gets uniform handling for tool data, errors, evidence, retries, idempotency, timeouts, observability, and replay metadata.
 - Citation tracking is tied to executed evidence instead of model-generated claims.
 - Raw SQL keeps the investigator powerful enough for open-ended diagnosis while `clickhouse.query` centralizes the safety guardrails.
 - `qx` has a crisp responsibility: generate SQL, not run investigations.
@@ -203,6 +203,7 @@ A plugin-style registry would make tools extensible earlier. It was rejected for
 ## References
 
 - ADR-0001: ClickHouse telemetry schema
+- ADR-0012: LangChain and LangGraph agentic runtime
 - ADR-0003: Ingest buffer
 - [Pydantic JSON Schema](https://docs.pydantic.dev/latest/concepts/json_schema/)
 - [OpenTelemetry trace semantic conventions](https://opentelemetry.io/docs/specs/semconv/)

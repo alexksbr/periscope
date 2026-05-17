@@ -3,8 +3,15 @@ from __future__ import annotations
 import time
 
 import pytest
+from langchain_core.tools import StructuredTool
 
-from periscope.tools import ToolContext, ToolRunner, build_tool_registry
+from periscope.tools import (
+    ToolContext,
+    ToolResult,
+    build_builtin_langchain_tools,
+    invoke_langchain_tool,
+    periscope_tool_result_from_message,
+)
 from periscope.tools.clickhouse import (
     ClickHouseConnectQueryExecutor,
     ClickHouseExecutionError,
@@ -15,10 +22,10 @@ pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
 
 
 async def test_clickhouse_tool_executes_real_query_and_reports_truncation() -> None:
-    runner = await _clickhouse_runner()
+    tool = await _clickhouse_tool()
 
-    result = await runner.run(
-        "clickhouse.query",
+    result = await _invoke_clickhouse_tool(
+        tool,
         {
             "sql": "SELECT number AS value FROM numbers(3) ORDER BY number",
             "limit": 2,
@@ -40,10 +47,10 @@ async def test_clickhouse_tool_executes_real_query_and_reports_truncation() -> N
 
 
 async def test_clickhouse_tool_executes_real_cte_query() -> None:
-    runner = await _clickhouse_runner()
+    tool = await _clickhouse_tool()
 
-    result = await runner.run(
-        "clickhouse.query",
+    result = await _invoke_clickhouse_tool(
+        tool,
         {"sql": "WITH recent AS (SELECT 1 AS value) SELECT value FROM recent"},
         _context("real-cte"),
     )
@@ -55,10 +62,10 @@ async def test_clickhouse_tool_executes_real_cte_query() -> None:
 
 
 async def test_clickhouse_tool_maps_real_query_errors() -> None:
-    runner = await _clickhouse_runner()
+    tool = await _clickhouse_tool()
 
-    result = await runner.run(
-        "clickhouse.query",
+    result = await _invoke_clickhouse_tool(
+        tool,
         {"sql": "SELECT * FROM periscope.__periscope_missing_tool_integration_table__"},
         _context("real-query-error"),
     )
@@ -70,9 +77,18 @@ async def test_clickhouse_tool_maps_real_query_errors() -> None:
     assert result.error.detail["exception_type"] == "DatabaseError"
 
 
-async def _clickhouse_runner() -> ToolRunner:
+async def _clickhouse_tool() -> StructuredTool:
     await _require_clickhouse()
-    return ToolRunner(build_tool_registry())
+    return build_builtin_langchain_tools()[0]
+
+
+async def _invoke_clickhouse_tool(
+    tool: StructuredTool,
+    arguments: dict[str, object],
+    context: ToolContext,
+) -> ToolResult[ClickHouseQueryData]:
+    message = await invoke_langchain_tool(tool, arguments=arguments, context=context)
+    return periscope_tool_result_from_message(message, ClickHouseQueryData)
 
 
 async def _require_clickhouse() -> None:

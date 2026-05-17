@@ -5,7 +5,7 @@ import time
 import pytest
 
 from periscope.qx import ClickHouseSchemaProvider, QxSchemaRequest
-from periscope.tools import ToolContext, ToolRunner, build_tool_registry
+from periscope.tools import ToolContext, build_builtin_langchain_tools
 from periscope.tools.clickhouse import ClickHouseConnectQueryExecutor, ClickHouseExecutionError
 
 pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
@@ -13,7 +13,7 @@ pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
 
 async def test_clickhouse_schema_provider_reads_real_system_columns() -> None:
     await _require_clickhouse()
-    provider = ClickHouseSchemaProvider(ToolRunner(build_tool_registry()))
+    provider = ClickHouseSchemaProvider(build_builtin_langchain_tools()[0])
 
     snapshot = await provider.snapshot(
         QxSchemaRequest(

@@ -20,7 +20,7 @@ Periscope also has product-specific boundaries that should remain explicit and t
 - LangChain is the default layer for chat-model invocation, prompt composition, structured output parsing, and framework tool adapters.
 - LangChain tools that expose Periscope tools are adapters, not the canonical tool contract.
 - Public Periscope APIs should expose Periscope models, not LangChain or LangGraph runtime objects.
-- Runtime code should preserve testability with fake chat models and fake tool runners.
+- Runtime code should preserve testability with fake chat models and fake tool adapters.
 
 ## Consequences
 

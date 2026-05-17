@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Protocol
+from langchain_core.tools import StructuredTool
 
 from periscope.qx.models import (
     QxColumnSchema,
@@ -10,16 +10,8 @@ from periscope.qx.models import (
     QxTableSchema,
 )
 from periscope.tools.clickhouse import ClickHouseQueryData
-from periscope.tools.models import ToolContext, ToolError, ToolResult
-
-
-class ToolRunnerLike(Protocol):
-    async def run(
-        self,
-        tool_name: str,
-        arguments: object,
-        context: ToolContext,
-    ) -> ToolResult[Any]: ...
+from periscope.tools.langchain import invoke_langchain_tool, periscope_tool_result_from_message
+from periscope.tools.models import ToolContext, ToolError
 
 
 class QxSchemaProviderError(Exception):
@@ -29,8 +21,8 @@ class QxSchemaProviderError(Exception):
 
 
 class ClickHouseSchemaProvider:
-    def __init__(self, tool_runner: ToolRunnerLike) -> None:
-        self._tool_runner = tool_runner
+    def __init__(self, clickhouse_tool: StructuredTool) -> None:
+        self._clickhouse_tool = clickhouse_tool
 
     async def snapshot(
         self,
@@ -38,11 +30,12 @@ class ClickHouseSchemaProvider:
         context: ToolContext,
     ) -> QxSchemaSnapshot:
         sql = _system_columns_sql(request)
-        result = await self._tool_runner.run(
-            "clickhouse.query",
-            {"sql": sql, "limit": request.max_columns},
-            context,
+        message = await invoke_langchain_tool(
+            self._clickhouse_tool,
+            arguments={"sql": sql, "limit": request.max_columns},
+            context=context,
         )
+        result = periscope_tool_result_from_message(message, ClickHouseQueryData)
         if result.status == "error":
             raise QxSchemaProviderError(_schema_error_from_tool_error(result.error))
         if not isinstance(result.data, ClickHouseQueryData):

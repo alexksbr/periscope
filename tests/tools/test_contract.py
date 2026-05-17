@@ -4,13 +4,10 @@ import pytest
 from pydantic import BaseModel, ValidationError
 
 from periscope.tools import (
-    DuplicateToolError,
-    InvalidToolDefinitionError,
     Tool,
     ToolContext,
     ToolError,
     ToolMetadata,
-    ToolRegistry,
     ToolResult,
 )
 
@@ -80,42 +77,6 @@ def test_tool_result_requires_error_payload_for_error_status() -> None:
                 tool_call_id="call-1",
             ),
         )
-
-
-def test_registry_registers_tool_and_returns_json_schema() -> None:
-    registry = ToolRegistry([EchoTool()])
-
-    schema = registry.input_schema("test.echo")
-
-    assert registry.names() == ("test.echo",)
-    assert schema["properties"]["message"]["type"] == "string"
-    assert registry.output_schema("test.echo")["properties"]["echoed"]["type"] == "string"
-
-
-def test_registry_rejects_duplicate_names() -> None:
-    registry = ToolRegistry([EchoTool()])
-
-    with pytest.raises(DuplicateToolError, match=r"tool already registered: test\.echo"):
-        registry.register(EchoTool())
-
-
-def test_registry_rejects_tool_names_without_domain() -> None:
-    tool = EchoTool()
-    tool.name = "echo"
-
-    with pytest.raises(InvalidToolDefinitionError, match="invalid tool name: echo"):
-        ToolRegistry([tool])
-
-
-def test_registry_rejects_invalid_timeout_contract() -> None:
-    tool = EchoTool()
-    tool.default_timeout_s = 10.0
-
-    with pytest.raises(
-        InvalidToolDefinitionError,
-        match="default timeout cannot exceed max timeout",
-    ):
-        ToolRegistry([tool])
 
 
 @pytest.mark.asyncio

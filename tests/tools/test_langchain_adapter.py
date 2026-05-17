@@ -1,22 +1,33 @@
 from __future__ import annotations
 
 import asyncio
+import operator
+from typing import Annotated, Any
 
 import pytest
+from langchain_core.messages import AIMessage, AnyMessage
+from langchain_core.tools import StructuredTool
+from langgraph.graph import END, START, StateGraph
+from langgraph.prebuilt import ToolNode
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from opentelemetry.trace import StatusCode
 from pydantic import BaseModel
+from typing_extensions import TypedDict
 
 from periscope.tools import (
+    DuplicateToolNameError,
     EvidenceRef,
+    InvalidToolDefinitionError,
     ToolCallRecord,
     ToolContext,
     ToolMetadata,
-    ToolRegistry,
     ToolResult,
-    ToolRunner,
+    build_langchain_tool,
+    build_langchain_tools,
+    invoke_langchain_tool,
+    periscope_tool_result_from_message,
 )
 
 
@@ -30,6 +41,10 @@ class RunnerOutput(BaseModel):
 
 class BinaryOutput(BaseModel):
     payload: bytes
+
+
+class GraphState(TypedDict):
+    messages: Annotated[list[AnyMessage], operator.add]
 
 
 class RecordingTool:
@@ -181,12 +196,10 @@ class FailingRecorder:
 
 
 @pytest.mark.asyncio
-async def test_runner_validates_arguments_and_executes_tool() -> None:
+async def test_langchain_adapter_validates_arguments_and_executes_tool() -> None:
     tool = RecordingTool()
-    runner = ToolRunner(ToolRegistry([tool]))
-
-    result = await runner.run(
-        "test.record",
+    result = await _invoke_result(
+        build_langchain_tool(tool),
         {"message": "hello"},
         ToolContext(
             investigation_id="inv-1",
@@ -205,49 +218,36 @@ async def test_runner_validates_arguments_and_executes_tool() -> None:
     assert result.metadata.duration_ms is not None
 
 
-@pytest.mark.asyncio
-async def test_runner_returns_error_for_unknown_tool() -> None:
-    runner = ToolRunner(ToolRegistry())
-
-    result = await runner.run(
-        "test.missing",
-        {"message": "hello"},
-        ToolContext(investigation_id="inv-1", tool_call_id="call-1"),
-    )
-
-    assert result.status == "error"
-    assert result.error is not None
-    assert result.error.code == "unknown_tool"
-    assert result.error.retryable is False
-    assert result.metadata.tool_name == "test.missing"
-    assert result.metadata.schema_version == "unknown"
+def test_langchain_tools_reject_duplicate_names() -> None:
+    with pytest.raises(DuplicateToolNameError, match=r"tool already registered: test\.record"):
+        build_langchain_tools([RecordingTool(), RecordingTool()])
 
 
-@pytest.mark.asyncio
-async def test_runner_returns_validation_error_without_executing_tool() -> None:
+def test_langchain_tool_rejects_tool_names_without_domain() -> None:
     tool = RecordingTool()
-    runner = ToolRunner(ToolRegistry([tool]))
+    tool.name = "record"
 
-    result = await runner.run(
-        "test.record",
-        {"wrong": "shape"},
-        ToolContext(investigation_id="inv-1", tool_call_id="call-1"),
-    )
+    with pytest.raises(InvalidToolDefinitionError, match="invalid tool name: record"):
+        build_langchain_tool(tool)
 
-    assert result.status == "error"
-    assert result.error is not None
-    assert result.error.code == "validation_error"
-    assert result.error.retryable is False
-    assert tool.calls == []
+
+def test_langchain_tool_rejects_invalid_timeout_contract() -> None:
+    tool = RecordingTool()
+    tool.default_timeout_s = 10.0
+
+    with pytest.raises(
+        InvalidToolDefinitionError,
+        match="default timeout cannot exceed max timeout",
+    ):
+        build_langchain_tool(tool)
 
 
 @pytest.mark.asyncio
-async def test_runner_rejects_non_idempotent_tool_without_idempotency_key() -> None:
+async def test_langchain_adapter_rejects_non_idempotent_tool_without_idempotency_key() -> None:
     tool = MutatingTool()
-    runner = ToolRunner(ToolRegistry([tool]))
 
-    result = await runner.run(
-        "test.mutate",
+    result = await _invoke_result(
+        build_langchain_tool(tool),
         {"message": "hello"},
         ToolContext(investigation_id="inv-1", tool_call_id="call-1"),
     )
@@ -259,12 +259,11 @@ async def test_runner_rejects_non_idempotent_tool_without_idempotency_key() -> N
 
 
 @pytest.mark.asyncio
-async def test_runner_allows_non_idempotent_tool_with_idempotency_key() -> None:
+async def test_langchain_adapter_allows_non_idempotent_tool_with_idempotency_key() -> None:
     tool = MutatingTool()
-    runner = ToolRunner(ToolRegistry([tool]))
 
-    result = await runner.run(
-        "test.mutate",
+    result = await _invoke_result(
+        build_langchain_tool(tool),
         {"message": "hello"},
         ToolContext(
             investigation_id="inv-1",
@@ -279,11 +278,9 @@ async def test_runner_allows_non_idempotent_tool_with_idempotency_key() -> None:
 
 
 @pytest.mark.asyncio
-async def test_runner_converts_timeout_to_retryable_tool_error() -> None:
-    runner = ToolRunner(ToolRegistry([SlowTool()]))
-
-    result = await runner.run(
-        "test.slow",
+async def test_langchain_adapter_converts_timeout_to_retryable_tool_error() -> None:
+    result = await _invoke_result(
+        build_langchain_tool(SlowTool()),
         {"message": "hello"},
         ToolContext(investigation_id="inv-1", tool_call_id="call-1"),
     )
@@ -296,11 +293,9 @@ async def test_runner_converts_timeout_to_retryable_tool_error() -> None:
 
 
 @pytest.mark.asyncio
-async def test_runner_converts_unexpected_exception_to_tool_error() -> None:
-    runner = ToolRunner(ToolRegistry([FailingTool()]))
-
-    result = await runner.run(
-        "test.fail",
+async def test_langchain_adapter_converts_unexpected_exception_to_tool_error() -> None:
+    result = await _invoke_result(
+        build_langchain_tool(FailingTool()),
         {"message": "hello"},
         ToolContext(investigation_id="inv-1", tool_call_id="call-1"),
     )
@@ -313,24 +308,21 @@ async def test_runner_converts_unexpected_exception_to_tool_error() -> None:
 
 
 @pytest.mark.asyncio
-async def test_runner_propagates_cancellation() -> None:
-    runner = ToolRunner(ToolRegistry([CancellingTool()]))
-
+async def test_langchain_adapter_propagates_cancellation() -> None:
     with pytest.raises(asyncio.CancelledError):
-        await runner.run(
-            "test.cancel",
-            {"message": "hello"},
-            ToolContext(investigation_id="inv-1", tool_call_id="call-1"),
+        await invoke_langchain_tool(
+            build_langchain_tool(CancellingTool()),
+            arguments={"message": "hello"},
+            context=ToolContext(investigation_id="inv-1", tool_call_id="call-1"),
         )
 
 
 @pytest.mark.asyncio
-async def test_runner_records_compact_success_record() -> None:
+async def test_langchain_adapter_records_compact_success_record() -> None:
     recorder = ListRecorder()
-    runner = ToolRunner(ToolRegistry([EvidenceTool()]), recorder=recorder)
 
-    result = await runner.run(
-        "test.evidence",
+    result = await _invoke_result(
+        build_langchain_tool(EvidenceTool(), recorder=recorder),
         {"message": "hello"},
         ToolContext(investigation_id="inv-1", tool_call_id="call-1"),
     )
@@ -352,32 +344,11 @@ async def test_runner_records_compact_success_record() -> None:
 
 
 @pytest.mark.asyncio
-async def test_runner_records_compact_error_record() -> None:
+async def test_langchain_adapter_bounds_recorded_output_preview() -> None:
     recorder = ListRecorder()
-    runner = ToolRunner(ToolRegistry([RecordingTool()]), recorder=recorder)
 
-    result = await runner.run(
-        "test.record",
-        {"wrong": "shape"},
-        ToolContext(investigation_id="inv-1", tool_call_id="call-1"),
-    )
-
-    assert result.status == "error"
-    assert len(recorder.records) == 1
-    record = recorder.records[0]
-    assert record.normalized_input is None
-    assert record.error is not None
-    assert record.error.code == "validation_error"
-    assert record.output_preview is None
-
-
-@pytest.mark.asyncio
-async def test_runner_bounds_recorded_output_preview() -> None:
-    recorder = ListRecorder()
-    runner = ToolRunner(ToolRegistry([LargeOutputTool()]), recorder=recorder)
-
-    await runner.run(
-        "test.large",
+    await _invoke_result(
+        build_langchain_tool(LargeOutputTool(), recorder=recorder),
         {"message": "hello"},
         ToolContext(investigation_id="inv-1", tool_call_id="call-1"),
     )
@@ -390,14 +361,14 @@ async def test_runner_bounds_recorded_output_preview() -> None:
 
 
 @pytest.mark.asyncio
-async def test_runner_omits_unserializable_output_preview_without_failing() -> None:
+async def test_langchain_adapter_omits_unserializable_output_preview_without_failing() -> None:
     recorder = ListRecorder()
-    runner = ToolRunner(ToolRegistry([BinaryOutputTool()]), recorder=recorder)
 
-    result = await runner.run(
-        "test.binary",
+    result = await _invoke_result(
+        build_langchain_tool(BinaryOutputTool(), recorder=recorder),
         {"message": "hello"},
         ToolContext(investigation_id="inv-1", tool_call_id="call-1"),
+        BinaryOutput,
     )
 
     assert result.status == "ok"
@@ -408,11 +379,9 @@ async def test_runner_omits_unserializable_output_preview_without_failing() -> N
 
 
 @pytest.mark.asyncio
-async def test_runner_ignores_recorder_failures() -> None:
-    runner = ToolRunner(ToolRegistry([RecordingTool()]), recorder=FailingRecorder())
-
-    result = await runner.run(
-        "test.record",
+async def test_langchain_adapter_ignores_recorder_failures() -> None:
+    result = await _invoke_result(
+        build_langchain_tool(RecordingTool(), recorder=FailingRecorder()),
         {"message": "hello"},
         ToolContext(investigation_id="inv-1", tool_call_id="call-1"),
     )
@@ -422,17 +391,16 @@ async def test_runner_ignores_recorder_failures() -> None:
 
 
 @pytest.mark.asyncio
-async def test_runner_emits_tool_span_attributes() -> None:
+async def test_langchain_adapter_emits_tool_span_attributes() -> None:
     tracer_provider = TracerProvider()
     exporter = InMemorySpanExporter()
     tracer_provider.add_span_processor(SimpleSpanProcessor(exporter))
-    runner = ToolRunner(
-        ToolRegistry([EvidenceTool()]),
-        tracer=tracer_provider.get_tracer("periscope-test"),
-    )
 
-    await runner.run(
-        "test.evidence",
+    await _invoke_result(
+        build_langchain_tool(
+            EvidenceTool(),
+            tracer=tracer_provider.get_tracer("periscope-test"),
+        ),
         {"message": "hello"},
         ToolContext(
             investigation_id="inv-1",
@@ -457,17 +425,16 @@ async def test_runner_emits_tool_span_attributes() -> None:
 
 
 @pytest.mark.asyncio
-async def test_runner_emits_error_span_attributes() -> None:
+async def test_langchain_adapter_emits_error_span_attributes() -> None:
     tracer_provider = TracerProvider()
     exporter = InMemorySpanExporter()
     tracer_provider.add_span_processor(SimpleSpanProcessor(exporter))
-    runner = ToolRunner(
-        ToolRegistry([FailingTool()]),
-        tracer=tracer_provider.get_tracer("periscope-test"),
-    )
 
-    await runner.run(
-        "test.fail",
+    await _invoke_result(
+        build_langchain_tool(
+            FailingTool(),
+            tracer=tracer_provider.get_tracer("periscope-test"),
+        ),
         {"message": "hello"},
         ToolContext(investigation_id="inv-1", tool_call_id="call-1"),
     )
@@ -478,3 +445,92 @@ async def test_runner_emits_error_span_attributes() -> None:
     assert attributes["periscope.tool.error_code"] == "execution_error"
     assert attributes["periscope.tool.error_retryable"] is False
     assert span.status.status_code == StatusCode.ERROR
+
+
+@pytest.mark.asyncio
+async def test_tool_node_preserves_periscope_tool_result_as_artifact() -> None:
+    graph = _compile_tool_graph(build_langchain_tool(RecordingTool()))
+
+    result = await graph.ainvoke(
+        _tool_call(message="hello"),
+        config={
+            "configurable": {
+                "periscope_tool_context": {
+                    "investigation_id": "inv-1",
+                    "tool_call_id": "call-1",
+                }
+            }
+        },
+    )
+
+    message = result["messages"][-1]
+    artifact = message.artifact
+
+    assert message.content == "test.record ok"
+    assert message.tool_call_id == "call-1"
+    assert artifact["status"] == "ok"
+    assert artifact["data"]["echoed"] == "hello"
+    assert artifact["metadata"]["tool_call_id"] == "call-1"
+
+
+@pytest.mark.asyncio
+async def test_tool_node_schema_validation_happens_before_periscope_contract() -> None:
+    graph = _compile_tool_graph(build_langchain_tool(RecordingTool()))
+
+    result = await graph.ainvoke(
+        _tool_call(arguments={"wrong": "shape"}),
+        config={
+            "configurable": {
+                "periscope_tool_context": {
+                    "investigation_id": "inv-1",
+                    "tool_call_id": "call-1",
+                }
+            }
+        },
+    )
+
+    message = result["messages"][-1]
+
+    assert message.status == "error"
+    assert "Error invoking tool 'test_record'" in message.content
+    assert not hasattr(message, "artifact") or message.artifact is None
+
+
+async def _invoke_result[DataT: BaseModel](
+    tool: StructuredTool,
+    arguments: dict[str, object],
+    context: ToolContext,
+    data_model: type[DataT] = RunnerOutput,
+) -> ToolResult[DataT]:
+    message = await invoke_langchain_tool(tool, arguments=arguments, context=context)
+    return periscope_tool_result_from_message(message, data_model)
+
+
+def _compile_tool_graph(tool: StructuredTool) -> Any:
+    builder = StateGraph(GraphState)
+    builder.add_node("tools", ToolNode([tool]))
+    builder.add_edge(START, "tools")
+    builder.add_edge("tools", END)
+    return builder.compile()
+
+
+def _tool_call(
+    *,
+    message: str = "hello",
+    arguments: dict[str, object] | None = None,
+) -> dict[str, list[AnyMessage]]:
+    return {
+        "messages": [
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "test_record",
+                        "args": arguments or {"message": message},
+                        "id": "call-1",
+                        "type": "tool_call",
+                    }
+                ],
+            )
+        ]
+    }

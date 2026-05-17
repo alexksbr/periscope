@@ -1,32 +1,38 @@
 from __future__ import annotations
 
-from typing import Any
-
 import pytest
 
 from periscope.qx import ClickHouseSchemaProvider, QxSchemaProviderError, QxSchemaRequest
-from periscope.tools.clickhouse import ClickHouseQueryData
+from periscope.tools import build_langchain_tool
+from periscope.tools.clickhouse import ClickHouseQueryData, ClickHouseQueryInput
 from periscope.tools.models import ToolContext, ToolError, ToolMetadata, ToolResult
 
 
-class FakeToolRunner:
-    def __init__(self, result: ToolResult[Any]) -> None:
-        self.result = result
-        self.calls: list[tuple[str, object, ToolContext]] = []
+class FakeClickHouseTool:
+    name = "clickhouse.query"
+    schema_version = "1"
+    input_model = ClickHouseQueryInput
+    output_model = ClickHouseQueryData
+    idempotent = True
+    default_timeout_s = 1.0
+    max_timeout_s = 2.0
 
-    async def run(
+    def __init__(self, result: ToolResult[ClickHouseQueryData]) -> None:
+        self.result = result
+        self.calls: list[tuple[ClickHouseQueryInput, ToolContext]] = []
+
+    async def execute(
         self,
-        tool_name: str,
-        arguments: object,
+        arguments: ClickHouseQueryInput,
         context: ToolContext,
-    ) -> ToolResult[Any]:
-        self.calls.append((tool_name, arguments, context))
+    ) -> ToolResult[ClickHouseQueryData]:
+        self.calls.append((arguments, context))
         return self.result
 
 
 @pytest.mark.asyncio
 async def test_clickhouse_schema_provider_loads_tables_from_system_columns() -> None:
-    runner = FakeToolRunner(
+    tool = FakeClickHouseTool(
         _ok_result(
             rows=[
                 {
@@ -47,22 +53,19 @@ async def test_clickhouse_schema_provider_loads_tables_from_system_columns() -> 
         )
     )
 
-    snapshot = await ClickHouseSchemaProvider(runner).snapshot(
+    snapshot = await ClickHouseSchemaProvider(build_langchain_tool(tool)).snapshot(
         QxSchemaRequest(include_tables=["otel_traces"]),
         _context(),
     )
 
-    assert runner.calls[0][0] == "clickhouse.query"
-    assert runner.calls[0][1] == {
-        "sql": (
-            "\n        SELECT\n            database,\n            table AS table_name,\n"
-            "            name AS column_name,\n            type AS column_type,\n"
-            "            position\n        FROM system.columns\n"
-            "        WHERE database = 'periscope' AND table IN ('otel_traces')\n"
-            "        ORDER BY table_name, position\n    "
-        ),
-        "limit": 1000,
-    }
+    assert tool.calls[0][0].sql == (
+        "\n        SELECT\n            database,\n            table AS table_name,\n"
+        "            name AS column_name,\n            type AS column_type,\n"
+        "            position\n        FROM system.columns\n"
+        "        WHERE database = 'periscope' AND table IN ('otel_traces')\n"
+        "        ORDER BY table_name, position\n    "
+    )
+    assert tool.calls[0][0].limit == 1000
     assert snapshot.database == "periscope"
     assert snapshot.column_count == 2
     assert [table.name for table in snapshot.tables] == ["otel_traces"]
@@ -71,16 +74,18 @@ async def test_clickhouse_schema_provider_loads_tables_from_system_columns() -> 
 
 @pytest.mark.asyncio
 async def test_clickhouse_schema_provider_preserves_truncation() -> None:
-    runner = FakeToolRunner(_ok_result(rows=[], truncated=True))
+    tool = FakeClickHouseTool(_ok_result(rows=[], truncated=True))
 
-    snapshot = await ClickHouseSchemaProvider(runner).snapshot(QxSchemaRequest(), _context())
+    snapshot = await ClickHouseSchemaProvider(build_langchain_tool(tool)).snapshot(
+        QxSchemaRequest(), _context()
+    )
 
     assert snapshot.truncated is True
 
 
 @pytest.mark.asyncio
 async def test_clickhouse_schema_provider_maps_tool_errors() -> None:
-    runner = FakeToolRunner(
+    tool = FakeClickHouseTool(
         ToolResult[ClickHouseQueryData](
             status="error",
             error=ToolError(
@@ -93,7 +98,9 @@ async def test_clickhouse_schema_provider_maps_tool_errors() -> None:
     )
 
     with pytest.raises(QxSchemaProviderError) as exc_info:
-        await ClickHouseSchemaProvider(runner).snapshot(QxSchemaRequest(), _context())
+        await ClickHouseSchemaProvider(build_langchain_tool(tool)).snapshot(
+            QxSchemaRequest(), _context()
+        )
 
     assert exc_info.value.error.code == "schema_provider_clickhouse_transport_error"
     assert exc_info.value.error.retryable is True
@@ -101,8 +108,8 @@ async def test_clickhouse_schema_provider_maps_tool_errors() -> None:
 
 @pytest.mark.asyncio
 async def test_clickhouse_schema_provider_rejects_unexpected_payload() -> None:
-    runner = FakeToolRunner(
-        ToolResult[Any](
+    tool = FakeClickHouseTool(
+        ToolResult[ClickHouseQueryData](
             status="ok",
             data=None,
             metadata=_metadata(),
@@ -110,7 +117,9 @@ async def test_clickhouse_schema_provider_rejects_unexpected_payload() -> None:
     )
 
     with pytest.raises(QxSchemaProviderError) as exc_info:
-        await ClickHouseSchemaProvider(runner).snapshot(QxSchemaRequest(), _context())
+        await ClickHouseSchemaProvider(build_langchain_tool(tool)).snapshot(
+            QxSchemaRequest(), _context()
+        )
 
     assert exc_info.value.error.code == "schema_provider_protocol_error"
 

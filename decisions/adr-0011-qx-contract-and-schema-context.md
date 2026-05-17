@@ -18,7 +18,7 @@ Natural-language SQL generation needs schema grounding. Without table and column
 
 - QX exposes typed Pydantic models for questions, schema snapshots, SQL candidates, compile results, and errors.
 - QX schema context is represented as database, table, and column models derived from ClickHouse `system.columns`.
-- The first schema provider uses `ToolRunner` and `clickhouse.query` to introspect schema. It does not open a separate ClickHouse client.
+- The first schema provider uses the LangChain adapter for `clickhouse.query` to introspect schema. It does not open a separate ClickHouse client.
 - QX compile output is SQL plus metadata such as referenced tables, referenced columns, assumptions, warnings, and confidence.
 - QX does not produce final evidence from generated SQL. Evidence remains tied to executed data from `clickhouse.query`.
 - This ADR does not add an LLM compiler, repair loop, CLI, or model-facing `qx.generate_sql` tool implementation.
@@ -28,12 +28,12 @@ Natural-language SQL generation needs schema grounding. Without table and column
 **Positive:**
 
 - QX has a stable typed boundary before prompt and repair behavior are introduced.
-- Schema access reuses the existing tool runner, timeout, validation, error handling, and recording path.
+- Schema access reuses the existing ClickHouse tool policy, timeout, validation, error handling, and recording path.
 - Generated SQL can be inspected independently from execution.
 
 **Negative / accepted costs:**
 
-- Schema introspection is a tool call, so it has the overhead and failure modes of the tool runner.
+- Schema introspection is a tool call, so it has the overhead and failure modes of the LangChain tool adapter.
 - The initial schema context is structural only; it does not include cardinality, examples, indexes, or semantic aliases.
 - Future QX compile and repair code must convert schema-provider failures into QX errors.
 

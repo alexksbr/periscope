@@ -2,15 +2,24 @@ from __future__ import annotations
 
 import pytest
 from clickhouse_connect.driver import exceptions as clickhouse_exceptions
+from pydantic import ValidationError
 
-from periscope.tools import ToolContext, ToolRegistry, ToolRunner
+from periscope.tools import (
+    ToolContext,
+    ToolResult,
+    build_langchain_tool,
+    invoke_langchain_tool,
+    periscope_tool_result_from_message,
+)
 from periscope.tools.clickhouse import (
     ClickHouseColumn,
     ClickHouseConnectClient,
     ClickHouseConnectConfig,
     ClickHouseConnectQueryExecutor,
     ClickHouseExecutionError,
+    ClickHouseQueryData,
     ClickHouseQueryExecution,
+    ClickHouseQueryExecutor,
     ClickHouseQueryTool,
     InvalidClickHouseQuery,
     prepare_clickhouse_select,
@@ -111,16 +120,23 @@ class ClientCreationFailingExecutor(ClickHouseConnectQueryExecutor):
         raise clickhouse_exceptions.OperationalError("connection refused")
 
 
+async def _run_clickhouse_tool(
+    executor: ClickHouseQueryExecutor,
+    arguments: dict[str, object],
+) -> ToolResult[ClickHouseQueryData]:
+    tool = build_langchain_tool(ClickHouseQueryTool(executor))
+    message = await invoke_langchain_tool(
+        tool,
+        arguments=arguments,
+        context=ToolContext(investigation_id="inv-1", tool_call_id="call-1"),
+    )
+    return periscope_tool_result_from_message(message, ClickHouseQueryData)
+
+
 @pytest.mark.asyncio
 async def test_clickhouse_query_executes_guarded_select_and_returns_evidence() -> None:
     executor = FakeClickHouseExecutor()
-    runner = ToolRunner(ToolRegistry([ClickHouseQueryTool(executor)]))
-
-    result = await runner.run(
-        "clickhouse.query",
-        {"sql": "SELECT 1 AS value", "limit": 50},
-        ToolContext(investigation_id="inv-1", tool_call_id="call-1"),
-    )
+    result = await _run_clickhouse_tool(executor, {"sql": "SELECT 1 AS value", "limit": 50})
 
     assert result.status == "ok"
     assert executor.executed_sql == ["SELECT * FROM (SELECT 1 AS value) LIMIT 51"]
@@ -142,13 +158,7 @@ async def test_clickhouse_query_executes_guarded_select_and_returns_evidence() -
 @pytest.mark.asyncio
 async def test_clickhouse_query_rejects_non_select_sql() -> None:
     executor = FakeClickHouseExecutor()
-    runner = ToolRunner(ToolRegistry([ClickHouseQueryTool(executor)]))
-
-    result = await runner.run(
-        "clickhouse.query",
-        {"sql": "DROP TABLE periscope.otel_traces"},
-        ToolContext(investigation_id="inv-1", tool_call_id="call-1"),
-    )
+    result = await _run_clickhouse_tool(executor, {"sql": "DROP TABLE periscope.otel_traces"})
 
     assert result.status == "error"
     assert result.error is not None
@@ -160,13 +170,7 @@ async def test_clickhouse_query_rejects_non_select_sql() -> None:
 @pytest.mark.asyncio
 async def test_clickhouse_query_rejects_multiple_statements() -> None:
     executor = FakeClickHouseExecutor()
-    runner = ToolRunner(ToolRegistry([ClickHouseQueryTool(executor)]))
-
-    result = await runner.run(
-        "clickhouse.query",
-        {"sql": "SELECT 1; SELECT 2"},
-        ToolContext(investigation_id="inv-1", tool_call_id="call-1"),
-    )
+    result = await _run_clickhouse_tool(executor, {"sql": "SELECT 1; SELECT 2"})
 
     assert result.status == "error"
     assert result.error is not None
@@ -178,13 +182,7 @@ async def test_clickhouse_query_rejects_multiple_statements() -> None:
 @pytest.mark.asyncio
 async def test_clickhouse_query_rejects_tokenizer_errors_as_invalid_sql() -> None:
     executor = FakeClickHouseExecutor()
-    runner = ToolRunner(ToolRegistry([ClickHouseQueryTool(executor)]))
-
-    result = await runner.run(
-        "clickhouse.query",
-        {"sql": "SELECT 'unterminated"},
-        ToolContext(investigation_id="inv-1", tool_call_id="call-1"),
-    )
+    result = await _run_clickhouse_tool(executor, {"sql": "SELECT 'unterminated"})
 
     assert result.status == "error"
     assert result.error is not None
@@ -196,13 +194,7 @@ async def test_clickhouse_query_rejects_tokenizer_errors_as_invalid_sql() -> Non
 @pytest.mark.asyncio
 async def test_clickhouse_query_rejects_format_clause() -> None:
     executor = FakeClickHouseExecutor()
-    runner = ToolRunner(ToolRegistry([ClickHouseQueryTool(executor)]))
-
-    result = await runner.run(
-        "clickhouse.query",
-        {"sql": "SELECT 1 FORMAT JSONEachRow"},
-        ToolContext(investigation_id="inv-1", tool_call_id="call-1"),
-    )
+    result = await _run_clickhouse_tool(executor, {"sql": "SELECT 1 FORMAT JSONEachRow"})
 
     assert result.status == "error"
     assert result.error is not None
@@ -214,29 +206,24 @@ async def test_clickhouse_query_rejects_format_clause() -> None:
 @pytest.mark.asyncio
 async def test_clickhouse_query_rejects_limit_above_maximum() -> None:
     executor = FakeClickHouseExecutor()
-    runner = ToolRunner(ToolRegistry([ClickHouseQueryTool(executor)]))
 
-    result = await runner.run(
-        "clickhouse.query",
-        {"sql": "SELECT 1", "limit": 1001},
-        ToolContext(investigation_id="inv-1", tool_call_id="call-1"),
-    )
+    tool = build_langchain_tool(ClickHouseQueryTool(executor))
 
-    assert result.status == "error"
-    assert result.error is not None
-    assert result.error.code == "validation_error"
+    with pytest.raises(ValidationError, match="less than or equal to 1000"):
+        await invoke_langchain_tool(
+            tool,
+            arguments={"sql": "SELECT 1", "limit": 1001},
+            context=ToolContext(investigation_id="inv-1", tool_call_id="call-1"),
+        )
     assert executor.executed_sql == []
 
 
 @pytest.mark.asyncio
 async def test_clickhouse_query_caps_rows_returned_by_executor() -> None:
     executor = FakeClickHouseExecutor(rows=[{"value": 1}, {"value": 2}])
-    runner = ToolRunner(ToolRegistry([ClickHouseQueryTool(executor)]))
-
-    result = await runner.run(
-        "clickhouse.query",
+    result = await _run_clickhouse_tool(
+        executor,
         {"sql": "SELECT number AS value FROM numbers(2)", "limit": 1},
-        ToolContext(investigation_id="inv-1", tool_call_id="call-1"),
     )
 
     assert result.status == "ok"
@@ -249,12 +236,9 @@ async def test_clickhouse_query_caps_rows_returned_by_executor() -> None:
 @pytest.mark.asyncio
 async def test_clickhouse_query_fetches_extra_row_to_detect_truncation() -> None:
     executor = FakeClickHouseExecutor(rows=[{"value": 1}, {"value": 2}])
-    runner = ToolRunner(ToolRegistry([ClickHouseQueryTool(executor)]))
-
-    result = await runner.run(
-        "clickhouse.query",
+    result = await _run_clickhouse_tool(
+        executor,
         {"sql": "SELECT number AS value FROM numbers(100)", "limit": 1},
-        ToolContext(investigation_id="inv-1", tool_call_id="call-1"),
     )
 
     assert executor.executed_sql == [
@@ -270,13 +254,7 @@ async def test_clickhouse_query_fetches_extra_row_to_detect_truncation() -> None
 @pytest.mark.asyncio
 async def test_clickhouse_query_maps_expected_executor_errors() -> None:
     executor = FailingClickHouseExecutor()
-    runner = ToolRunner(ToolRegistry([ClickHouseQueryTool(executor)]))
-
-    result = await runner.run(
-        "clickhouse.query",
-        {"sql": "SELECT 1"},
-        ToolContext(investigation_id="inv-1", tool_call_id="call-1"),
-    )
+    result = await _run_clickhouse_tool(executor, {"sql": "SELECT 1"})
 
     assert result.status == "error"
     assert result.error is not None
@@ -309,12 +287,9 @@ def test_prepare_clickhouse_select_allows_format_identifier() -> None:
 @pytest.mark.asyncio
 async def test_clickhouse_query_accepts_with_cte_select() -> None:
     executor = FakeClickHouseExecutor()
-    runner = ToolRunner(ToolRegistry([ClickHouseQueryTool(executor)]))
-
-    result = await runner.run(
-        "clickhouse.query",
-        {"sql": ("WITH recent AS (SELECT 1 AS value) SELECT value FROM recent")},
-        ToolContext(investigation_id="inv-1", tool_call_id="call-1"),
+    result = await _run_clickhouse_tool(
+        executor,
+        {"sql": "WITH recent AS (SELECT 1 AS value) SELECT value FROM recent"},
     )
 
     assert result.status == "ok"
@@ -419,12 +394,9 @@ async def test_clickhouse_connect_executor_maps_client_creation_transport_errors
 
 @pytest.mark.asyncio
 async def test_clickhouse_query_reports_client_creation_failure_as_clickhouse_error() -> None:
-    runner = ToolRunner(ToolRegistry([ClickHouseQueryTool(ClientCreationFailingExecutor())]))
-
-    result = await runner.run(
-        "clickhouse.query",
+    result = await _run_clickhouse_tool(
+        ClientCreationFailingExecutor(),
         {"sql": "SELECT 1"},
-        ToolContext(investigation_id="inv-1", tool_call_id="call-1"),
     )
 
     assert result.status == "error"
